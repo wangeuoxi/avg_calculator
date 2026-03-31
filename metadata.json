@@ -1,0 +1,5 @@
+{
+  "name": "学生加权平均分计算器",
+  "description": "批量计算学生加权平均分，支持Excel导入、手动修改学分、学生管理及排名导出。",
+  "requestFramePermissions": []
+}
