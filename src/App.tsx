@@ -364,14 +364,27 @@ export default function App() {
                       : "hover:bg-slate-50 text-slate-600 border border-transparent"
                   )}
                 >
-                  <div className="flex justify-between items-start">
+                  <div className="flex justify-between items-start mb-2">
                     <div>
                       <h4 className="font-semibold text-sm truncate max-w-[140px]">{student.name}</h4>
                       <p className="text-xs opacity-60 mt-1 font-mono">{student.id}</p>
                     </div>
-                    <span className="text-[10px] bg-white/50 px-1.5 py-0.5 rounded border border-slate-200">
-                      {student.courses.length} 门课
-                    </span>
+                    <div className="text-right">
+                      <span className="text-[10px] bg-white/50 px-1.5 py-0.5 rounded border border-slate-200 block mb-1">
+                        {student.courses.length} 门课
+                      </span>
+                      <span className="text-[10px] font-bold text-blue-600">
+                        GPA: {calculateAverageGPA(student.courses).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                    <motion.div 
+                      className="h-full bg-blue-500"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(calculateAverageGPA(student.courses) / 4.0) * 100}%` }}
+                      transition={{ duration: 0.5 }}
+                    />
                   </div>
                   <button 
                     onClick={(e) => {
@@ -402,42 +415,66 @@ export default function App() {
               <div className="grid grid-cols-4 gap-6 mb-8">
                 {/* ... existing stats ... */}
                 <div className="glass-card p-6 flex items-center gap-4">
-                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
+                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 shrink-0">
                     <GraduationCap className="w-6 h-6" />
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <p className="text-xs text-slate-400 font-medium mb-1">加权平均分</p>
-                    <h2 className="text-2xl font-bold text-slate-800">
+                    <h2 className="text-2xl font-bold text-slate-800 mb-2">
                       {selectedStudent ? calculateWeightedAverage(selectedStudent.courses).toFixed(2) : '0.00'}
                     </h2>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-blue-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${selectedStudent ? Math.min(100, calculateWeightedAverage(selectedStudent.courses)) : 0}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                      />
+                    </div>
                   </div>
                 </div>
 
                 <div className="glass-card p-6 flex items-center gap-4">
-                  <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
+                  <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 shrink-0">
                     <BookOpen className="w-6 h-6" />
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <p className="text-xs text-slate-400 font-medium mb-1">总学分</p>
-                    <h2 className="text-2xl font-bold text-slate-800">
-                      {selectedStudent ? selectedStudent.courses.reduce((sum, c) => sum + c.credit, 0).toFixed(1) : '0.0'}
+                    <h2 className="text-2xl font-bold text-slate-800 mb-2">
+                      {selectedStudent ? selectedStudent.courses.reduce((sum, c) => sum + Number(c.credit), 0).toFixed(1) : '0.0'}
                     </h2>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-emerald-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${selectedStudent ? Math.min(100, (selectedStudent.courses.reduce((sum, c) => sum + Number(c.credit), 0) / 160) * 100) : 0}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                      />
+                    </div>
                   </div>
                 </div>
 
                 <div className="glass-card p-6 flex items-center gap-4">
-                  <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600">
+                  <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600 shrink-0">
                     <Users className="w-6 h-6" />
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <p className="text-xs text-slate-400 font-medium mb-1">班级概况</p>
-                    <div className="flex items-baseline gap-2">
+                    <div className="flex items-baseline gap-2 mb-2">
                       <h2 className="text-2xl font-bold text-slate-800">
                         {calculateClassAverage(students).toFixed(1)}
                       </h2>
-                      <span className="text-xs text-slate-400 font-mono">
+                      <span className="text-xs text-slate-400 font-mono font-bold text-purple-600">
                         GPA: {calculateClassAverageGPA(students).toFixed(2)}
                       </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-purple-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(calculateClassAverageGPA(students) / 4.0) * 100}%` }}
+                        transition={{ duration: 0.8, ease: "easeOut" }}
+                      />
                     </div>
                   </div>
                 </div>
@@ -475,6 +512,7 @@ export default function App() {
 
                   {/* Right Column: Charts & Summary */}
                   <div className="col-span-4 space-y-6">
+                    <GPAComparison student={selectedStudent} students={students} />
                     <GradeDistribution student={selectedStudent} />
                     
                     <div className="glass-card p-6 bg-blue-600 text-white border-none">
@@ -486,20 +524,89 @@ export default function App() {
                         当前数据存储在浏览器内存中，刷新页面会丢失。请及时导出 Excel 保存。
                       </p>
                       
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-end">
-                          <span className="text-sm text-blue-100">及格率</span>
-                          <span className="text-2xl font-bold">
-                            {selectedStudent.courses.length > 0 
-                              ? Math.round((selectedStudent.courses.filter(c => Number(c.grade) >= 60).length / selectedStudent.courses.length) * 100)
-                              : 0}%
-                          </span>
+                      <div className="space-y-6">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1">
+                            <span className="text-sm text-blue-100 block">及格率</span>
+                            <span className="text-3xl font-bold">
+                              {selectedStudent.courses.length > 0 
+                                ? Math.round((selectedStudent.courses.filter(c => Number(c.grade) >= 60).length / selectedStudent.courses.length) * 100)
+                                : 0}%
+                            </span>
+                          </div>
+                          <div className="relative w-20 h-20 flex items-center justify-center">
+                            <svg className="w-full h-full transform -rotate-90">
+                              <circle
+                                cx="40"
+                                cy="40"
+                                r="34"
+                                stroke="rgba(255,255,255,0.1)"
+                                strokeWidth="6"
+                                fill="transparent"
+                              />
+                              <motion.circle
+                                cx="40"
+                                cy="40"
+                                r="34"
+                                stroke="white"
+                                strokeWidth="6"
+                                fill="transparent"
+                                strokeDasharray={2 * Math.PI * 34}
+                                initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
+                                animate={{ 
+                                  strokeDashoffset: 2 * Math.PI * 34 * (1 - (selectedStudent.courses.length > 0 
+                                    ? (selectedStudent.courses.filter(c => Number(c.grade) >= 60).length / selectedStudent.courses.length)
+                                    : 0)) 
+                                }}
+                                transition={{ duration: 1, ease: "easeOut" }}
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <AlertCircle className="w-5 h-5 text-blue-200" />
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex justify-between items-end">
-                          <span className="text-sm text-blue-100">平均 GPA (4.0)</span>
-                          <span className="text-2xl font-bold">
-                            {calculateAverageGPA(selectedStudent.courses).toFixed(2)}
-                          </span>
+
+                        <div className="h-px bg-white/10" />
+
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1">
+                            <span className="text-sm text-blue-100 block">平均 GPA (4.0)</span>
+                            <span className="text-3xl font-bold">
+                              {calculateAverageGPA(selectedStudent.courses).toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="relative w-20 h-20 flex items-center justify-center">
+                            <svg className="w-full h-full transform -rotate-90">
+                              <circle
+                                cx="40"
+                                cy="40"
+                                r="34"
+                                stroke="rgba(255,255,255,0.1)"
+                                strokeWidth="6"
+                                fill="transparent"
+                              />
+                              <motion.circle
+                                cx="40"
+                                cy="40"
+                                r="34"
+                                stroke="white"
+                                strokeWidth="6"
+                                fill="transparent"
+                                strokeDasharray={2 * Math.PI * 34}
+                                initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
+                                animate={{ 
+                                  strokeDashoffset: 2 * Math.PI * 34 * (1 - (calculateAverageGPA(selectedStudent.courses) / 4.0)) 
+                                }}
+                                transition={{ duration: 1, ease: "easeOut" }}
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <GraduationCap className="w-5 h-5 text-blue-200" />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -963,6 +1070,90 @@ function GradeTable({
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function GPAComparison({ student, students }: { student: Student, students: Student[] }) {
+  const studentGPA = calculateAverageGPA(student.courses);
+  const classGPA = calculateClassAverageGPA(students);
+  const maxGPA = 4.0;
+
+  return (
+    <div className="glass-card p-6">
+      <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
+        <GraduationCap className="w-4 h-4 text-blue-600" />
+        GPA 仪表盘
+      </h3>
+      
+      <div className="flex justify-center mb-8">
+        <div className="relative w-32 h-32 flex items-center justify-center">
+          <svg className="w-full h-full transform -rotate-90">
+            <circle
+              cx="64"
+              cy="64"
+              r="58"
+              stroke="#f1f5f9"
+              strokeWidth="8"
+              fill="transparent"
+            />
+            <motion.circle
+              cx="64"
+              cy="64"
+              r="58"
+              stroke="#3b82f6"
+              strokeWidth="8"
+              fill="transparent"
+              strokeDasharray={2 * Math.PI * 58}
+              initial={{ strokeDashoffset: 2 * Math.PI * 58 }}
+              animate={{ 
+                strokeDashoffset: 2 * Math.PI * 58 * (1 - (studentGPA / maxGPA)) 
+              }}
+              transition={{ duration: 1.5, ease: "easeOut" }}
+              strokeLinecap="round"
+            />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-2xl font-black text-slate-800">{studentGPA.toFixed(2)}</span>
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">GPA</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <span>班级平均</span>
+            <span className="text-purple-600">{classGPA.toFixed(2)}</span>
+          </div>
+          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+            <motion.div 
+              className="h-full bg-purple-500"
+              initial={{ width: 0 }}
+              animate={{ width: `${(classGPA / maxGPA) * 100}%` }}
+              transition={{ duration: 1, ease: "easeOut" }}
+            />
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "w-2 h-2 rounded-full",
+              studentGPA >= classGPA ? "bg-emerald-500" : "bg-amber-500"
+            )} />
+            <span className="text-xs text-slate-500">
+              {studentGPA >= classGPA ? "领先班级平均" : "落后班级平均"}
+            </span>
+          </div>
+          <span className={cn(
+            "text-xs font-bold",
+            studentGPA >= classGPA ? "text-emerald-600" : "text-amber-600"
+          )}>
+            {Math.abs(studentGPA - classGPA).toFixed(2)}
+          </span>
+        </div>
       </div>
     </div>
   );
