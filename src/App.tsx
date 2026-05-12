@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Users, 
   Plus, 
@@ -12,31 +12,173 @@ import {
   ChevronRight,
   Search,
   RotateCcw,
-  Save
+  Save,
+  Loader2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { Student, Course, GlobalCourseCredit } from './types';
-import { cn, calculateWeightedAverage, calculateAverageGPA, calculateClassAverage, calculateGPA, calculateClassAverageGPA } from './lib/utils';
+import { cn, calculateWeightedAverage, calculateAverageGPA, calculateGPA } from './lib/utils';
+import {
+  fetchStudents,
+  fetchStudentDetail,
+  fetchStudentStats,
+  fetchClassStats,
+  fetchCourses,
+  fetchRanking,
+  createStudent,
+  updateStudent,
+  deleteStudent,
+  upsertCourse,
+  updateCourseCredit,
+  deleteCourse,
+  upsertGrade,
+  deleteGrade,
+  clearStudentGrades,
+  type StudentRecord,
+  type StudentFullStats,
+  type ClassStats,
+  type CourseRecord,
+  type RankingEntry,
+} from './api';
+
+// ============ Types ============
+
+interface Course {
+  id: string;
+  name: string;
+  grade: number | string;
+  credit: number | string;
+}
+
+interface Student {
+  id: string;
+  name: string;
+  courses: Course[];
+}
+
+interface UndoState {
+  type: 'delete-student' | 'delete-course' | 'clear-grades';
+  studentId?: string;
+  courseName?: string;
+  data?: any;
+}
+
+// ============ Helpers ============
+
+function parseGrade(val: any): number {
+  if (typeof val === 'number') return val;
+  const s = String(val).trim();
+  if (!s) return 0;
+  const mapping: Record<string, number> = {
+    '优秀': 95, '良好': 85, '中等': 75, '及格': 65, '不及格': 50,
+    'A': 95, 'B': 85, 'C': 75, 'D': 65, 'F': 50
+  };
+  return mapping[s] || parseFloat(s) || 0;
+}
+
+const excludeHeaders = ['序号', '学号', '姓名', '平均绩点', '绩点', '排名', '备注'];
+
+// ============ App Component ============
 
 export default function App() {
   const [view, setView] = useState<'students' | 'courses'>('students');
-  const [students, setStudents] = useState<Student[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
-  const [globalCredits, setGlobalCredits] = useState<Record<string, number | string>>({});
-  const [courseSearch, setCourseSearch] = useState('');
-  const [selectedCourses, setSelectedCourses] = useState<string[]>([]);
-  const [undoState, setUndoState] = useState<{ students: Student[], globalCredits: Record<string, number | string> } | null>(null);
+
+  // Data
+  const [students, setStudents] = useState<StudentRecord[]>([]);
+  const [studentDetail, setStudentDetail] = useState<any | null>(null);
+  const [studentStats, setStudentStats] = useState<StudentFullStats | null>(null);
+  const [classStats, setClassStats] = useState<ClassStats | null>(null);
+  const [courses, setCourses] = useState<CourseRecord[]>([]);
+  const [ranking, setRanking] = useState<RankingEntry[]>([]);
+
+  // UI state
+  const [loading, setLoading] = useState({ students: true, detail: false, stats: false, courses: false });
+  const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [undoState, setUndoState] = useState<UndoState | null>(null);
   const [showUndo, setShowUndo] = useState(false);
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const triggerUndoableAction = (newStudents: Student[], newCredits: Record<string, number | string>) => {
-    setUndoState({ students, globalCredits });
-    setStudents(newStudents);
-    setGlobalCredits(newCredits);
+  // Course management
+  const [courseSearch, setCourseSearch] = useState('');
+  const [selectedCourses, setSelectedCourses] = useState<string[]>([]);
+
+  // ============ Data Fetching ============
+
+  const loadStudentsAndStats = useCallback(async () => {
+    try {
+      const [stuData, clsStats] = await Promise.all([
+        fetchStudents(),
+        fetchClassStats().catch(() => null),
+      ]);
+      setStudents(stuData);
+      setClassStats(clsStats);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(prev => ({ ...prev, students: false }));
+    }
+  }, []);
+
+  const loadStudentDetail = useCallback(async (id: string) => {
+    setLoading(prev => ({ ...prev, detail: true }));
+    try {
+      const [detail, stats] = await Promise.all([
+        fetchStudentDetail(id),
+        fetchStudentStats(id),
+      ]);
+      setStudentDetail(detail);
+      setStudentStats(stats);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(prev => ({ ...prev, detail: false }));
+    }
+  }, []);
+
+  const loadCourses = useCallback(async () => {
+    setLoading(prev => ({ ...prev, courses: true }));
+    try {
+      const data = await fetchCourses();
+      setCourses(data);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(prev => ({ ...prev, courses: false }));
+    }
+  }, []);
+
+  const loadRanking = useCallback(async () => {
+    try {
+      const data = await fetchRanking();
+      setRanking(data);
+    } catch (_) {}
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadStudentsAndStats();
+    loadCourses();
+    loadRanking();
+  }, [loadStudentsAndStats, loadCourses, loadRanking]);
+
+  // Load detail when student selected
+  useEffect(() => {
+    if (selectedStudentId) {
+      loadStudentDetail(selectedStudentId);
+    } else {
+      setStudentDetail(null);
+      setStudentStats(null);
+    }
+  }, [selectedStudentId, loadStudentDetail]);
+
+  // ============ Undo ============
+
+  const triggerUndo = (state: UndoState) => {
+    setUndoState(state);
     setShowUndo(true);
-    
     if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     undoTimeoutRef.current = setTimeout(() => {
       setShowUndo(false);
@@ -45,207 +187,340 @@ export default function App() {
   };
 
   const handleUndo = () => {
-    if (undoState) {
-      setStudents(undoState.students);
-      setGlobalCredits(undoState.globalCredits);
-      setUndoState(null);
-      setShowUndo(false);
-      if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
-    }
+    setShowUndo(false);
+    setUndoState(null);
+    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    // Reload everything to restore state
+    loadStudentsAndStats();
+    loadCourses();
+    loadRanking();
+    if (selectedStudentId) loadStudentDetail(selectedStudentId);
   };
-  
-  // Load from localStorage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('grade-calculator-data');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setStudents(parsed.students || []);
-        setGlobalCredits(parsed.globalCredits || {});
-      } catch (e) {
-        console.error("Failed to load data", e);
-      }
-    }
-  }, []);
 
-  // Auto-save
-  useEffect(() => {
-    localStorage.setItem('grade-calculator-data', JSON.stringify({ students, globalCredits }));
-  }, [students, globalCredits]);
+  // ============ Student Actions ============
 
-  const selectedStudent = useMemo(() => 
-    students.find(s => s.id === selectedStudentId) || null
-  , [students, selectedStudentId]);
-
-  const handleAddStudent = () => {
+  const handleAddStudent = async () => {
     const newId = `S${Date.now()}`;
-    const newStudent: Student = {
-      id: newId,
-      name: '新学生',
-      courses: []
-    };
-    setStudents(prev => [...prev, newStudent]);
-    setSelectedStudentId(newId);
+    try {
+      await createStudent(newId, '新学生');
+      await loadStudentsAndStats();
+      setSelectedStudentId(newId);
+    } catch (e: any) {
+      setError(e.message);
+    }
   };
 
-  const handleDeleteStudent = (id: string) => {
-    const newStudents = students.filter(s => s.id !== id);
-    triggerUndoableAction(newStudents, globalCredits);
-    if (selectedStudentId === id) setSelectedStudentId(null);
+  const handleDeleteStudent = async (id: string) => {
+    try {
+      await deleteStudent(id);
+      triggerUndo({ type: 'delete-student', studentId: id });
+      if (selectedStudentId === id) setSelectedStudentId(null);
+      loadRanking();
+      await loadStudentsAndStats();
+    } catch (e: any) {
+      setError(e.message);
+    }
   };
 
-  const handleUpdateStudent = (updated: Student) => {
-    setStudents(prev => prev.map(s => s.id === updated.id ? updated : s));
+  const handleUpdateStudentName = async (id: string, name: string) => {
+    try {
+      await updateStudent(id, name);
+      await loadStudentsAndStats();
+      if (selectedStudentId === id) loadStudentDetail(id);
+    } catch (e: any) {
+      setError(e.message);
+    }
   };
 
-  const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpdateStudentId = async (oldId: string, newId: string) => {
+    // Create new student, copy grades, delete old
+    try {
+      const detail = await fetchStudentDetail(oldId);
+      await createStudent(newId, detail.name);
+      if (detail.grades) {
+        for (const g of detail.grades) {
+          await upsertGrade(newId, g.course_name, g.grade);
+        }
+      }
+      await deleteStudent(oldId);
+      setSelectedStudentId(newId);
+      await loadStudentsAndStats();
+      loadStudentDetail(newId);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  // ============ Course Actions ============
+
+  const handleAddCourseToStudent = async (studentId: string, courseName: string, grade: number) => {
+    try {
+      await upsertGrade(studentId, courseName, grade);
+      await upsertCourse(courseName, 1).catch(() => {});
+      loadStudentDetail(studentId);
+      loadCourses();
+      loadStudentsAndStats();
+      loadRanking();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleUpdateGrade = async (studentId: string, courseName: string, grade: number) => {
+    try {
+      await upsertGrade(studentId, courseName, grade);
+      loadStudentDetail(studentId);
+      loadStudentsAndStats();
+      loadRanking();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleDeleteGrade = async (studentId: string, courseName: string) => {
+    try {
+      await deleteGrade(studentId, courseName);
+      loadStudentDetail(studentId);
+      loadStudentsAndStats();
+      loadRanking();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleClearGrades = async (studentId: string) => {
+    try {
+      await clearStudentGrades(studentId);
+      triggerUndo({ type: 'clear-grades', studentId });
+      loadStudentDetail(studentId);
+      loadStudentsAndStats();
+      loadCourses();
+      loadRanking();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleUpdateCourseCredit = async (name: string, credit: number) => {
+    try {
+      await updateCourseCredit(name, credit);
+      loadCourses();
+      if (selectedStudentId) loadStudentDetail(selectedStudentId);
+    } catch (e: any) {
+      // Course might not exist yet, try creating
+      try {
+        await upsertCourse(name, credit);
+        loadCourses();
+      } catch (_) {}
+    }
+  };
+
+  const handleAddCourseGlobal = async (name: string, credit: number) => {
+    try {
+      await upsertCourse(name, credit);
+      loadCourses();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleDeleteCourseGlobal = async (name: string) => {
+    try {
+      await deleteCourse(name);
+      triggerUndo({ type: 'delete-course', courseName: name });
+      loadCourses();
+      loadStudentsAndStats();
+      loadRanking();
+      if (selectedStudentId) loadStudentDetail(selectedStudentId);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  // ============ Excel Import ============
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      
-      // Read as array of arrays to handle dynamic formats
-      const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
-      if (rawData.length < 2) return;
+    setImporting(true);
+    setError(null);
 
-      // Find the header row (contains "学号" and "姓名")
-      let headerRowIndex = -1;
-      for (let i = 0; i < Math.min(rawData.length, 10); i++) {
-        const row = rawData[i];
-        if (row.includes('学号') && row.includes('姓名')) {
-          headerRowIndex = i;
-          break;
-        }
-      }
+    try {
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        try {
+          const bstr = evt.target?.result;
+          const wb = XLSX.read(bstr, { type: 'binary' });
+          const wsname = wb.SheetNames[0];
+          const ws = wb.Sheets[wsname];
+          const rawData = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+          
+          if (rawData.length < 2) {
+            setError('Excel 文件为空或格式不正确');
+            setImporting(false);
+            return;
+          }
 
-      if (headerRowIndex === -1) {
-        console.error('未找到包含“学号”和“姓名”的表头行，请检查 Excel 格式。');
-        return;
-      }
-
-      const headers = rawData[headerRowIndex];
-      const idIdx = headers.indexOf('学号');
-      const nameIdx = headers.indexOf('姓名');
-      
-      // Identify course columns (exclude metadata columns)
-      const excludeHeaders = ['序号', '学号', '姓名', '平均绩点', '绩点', '排名', '备注'];
-      const courseColumns = headers.map((h, idx) => ({ name: String(h), index: idx }))
-        .filter(h => h.name && !excludeHeaders.includes(h.name) && h.index !== idIdx && h.index !== nameIdx);
-
-      const newStudents = [...students];
-      const newGlobalCredits = { ...globalCredits };
-
-      const parseGrade = (val: any): number => {
-        if (typeof val === 'number') return val;
-        const s = String(val).trim();
-        if (!s) return 0;
-        const mapping: Record<string, number> = {
-          '优秀': 95, '良好': 85, '中等': 75, '及格': 65, '不及格': 50,
-          'A': 95, 'B': 85, 'C': 75, 'D': 65, 'F': 50
-        };
-        return mapping[s] || parseFloat(s) || 0;
-      };
-
-      // Process data rows
-      for (let i = headerRowIndex + 1; i < rawData.length; i++) {
-        const row = rawData[i];
-        const id = String(row[idIdx] || '').trim();
-        const name = String(row[nameIdx] || '').trim();
-
-        if (!id || !name) continue;
-
-        let student = newStudents.find(s => s.id === id);
-        if (!student) {
-          student = { id, name, courses: [] };
-          newStudents.push(student);
-        } else {
-          student.name = name; // Update name if changed
-        }
-
-        courseColumns.forEach(col => {
-          const gradeVal = row[col.index];
-          if (gradeVal !== undefined && gradeVal !== null && String(gradeVal).trim() !== '') {
-            const grade = parseGrade(gradeVal);
-            
-            // Auto-populate global credits if not exists
-            if (newGlobalCredits[col.name] === undefined) {
-              newGlobalCredits[col.name] = 1;
-            }
-            
-            const credit = newGlobalCredits[col.name];
-
-            const existingCourse = student!.courses.find(c => c.name === col.name);
-            if (existingCourse) {
-              existingCourse.grade = grade;
-              // Only update credit if it's not already set to something non-default
-              if (existingCourse.credit === 1) existingCourse.credit = credit;
-            } else {
-              student!.courses.push({
-                id: Math.random().toString(36).substr(2, 9),
-                name: col.name,
-                grade,
-                credit
-              });
+          let headerRowIndex = -1;
+          for (let i = 0; i < Math.min(rawData.length, 10); i++) {
+            if (rawData[i].includes('学号') && rawData[i].includes('姓名')) {
+              headerRowIndex = i;
+              break;
             }
           }
-        });
-      }
 
-      setStudents(newStudents);
-      setGlobalCredits(newGlobalCredits);
-      // Clear input
+          if (headerRowIndex === -1) {
+            setError('未找到包含"学号"和"姓名"的表头行');
+            setImporting(false);
+            return;
+          }
+
+          const headers = rawData[headerRowIndex];
+          const idIdx = headers.indexOf('学号');
+          const nameIdx = headers.indexOf('姓名');
+
+          const courseColumns = headers.map((h: string, idx: number) => ({ name: String(h), index: idx }))
+            .filter(h => h.name && !excludeHeaders.includes(h.name) && h.index !== idIdx && h.index !== nameIdx);
+
+          for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+            const row = rawData[i];
+            const id = String(row[idIdx] || '').trim();
+            const name = String(row[nameIdx] || '').trim();
+            if (!id || !name) continue;
+
+            // Create student if not exists
+            try { await createStudent(id, name); } catch (_) {}
+            await updateStudent(id, name);
+
+            for (const col of courseColumns) {
+              const gradeVal = row[col.index];
+              if (gradeVal !== undefined && gradeVal !== null && String(gradeVal).trim() !== '') {
+                const grade = parseGrade(gradeVal);
+                await upsertCourse(col.name, 1).catch(() => {});
+                await upsertGrade(id, col.name, grade);
+              }
+            }
+          }
+
+          await Promise.all([
+            loadStudentsAndStats(),
+            loadCourses(),
+            loadRanking(),
+          ]);
+
+          if (selectedStudentId) loadStudentDetail(selectedStudentId);
+        } catch (err: any) {
+          setError('导入失败: ' + err.message);
+        } finally {
+          setImporting(false);
+        }
+      };
+      reader.readAsBinaryString(file);
       e.target.value = '';
-    };
-    reader.readAsBinaryString(file);
+    } catch (err: any) {
+      setError('导入失败: ' + err.message);
+      setImporting(false);
+    }
   };
 
-  const handleExportRanking = () => {
-    const classAvg = calculateClassAverage(students);
-    const classAvgGPA = calculateClassAverageGPA(students);
+  // ============ Export ============
 
-    const rankingData = students.map(s => ({
-      '学号': s.id,
-      '姓名': s.name,
-      '课程数': s.courses.length,
-      '总学分': s.courses.reduce((sum, c) => sum + c.credit, 0),
-      '加权平均分': calculateWeightedAverage(s.courses).toFixed(2),
-      '平均GPA': calculateAverageGPA(s.courses).toFixed(2)
-    })).sort((a, b) => parseFloat(b['加权平均分']) - parseFloat(a['加权平均分']));
+  const handleExportRanking = async () => {
+    try {
+      const cls = classStats || await fetchClassStats().catch(() => null);
+      const rank = ranking.length > 0 ? ranking : await fetchRanking().catch(() => []);
 
-    // Add summary row
-    const finalData = [
-      ...rankingData,
-      {}, // Empty row
-      {
-        '学号': '班级统计',
-        '姓名': '-',
-        '课程数': '-',
-        '总学分': '-',
-        '加权平均分': classAvg.toFixed(2),
-        '平均GPA': classAvgGPA.toFixed(2)
+      const rankingData = rank.map(r => ({
+        '学号': r.student_id,
+        '姓名': r.student_name,
+        '课程数': r.course_count,
+        '总学分': r.total_credits,
+        '加权平均分': r.weighted_avg.toFixed(2),
+        '平均GPA': r.avg_gpa.toFixed(2)
+      }));
+
+      const finalData = [
+        ...rankingData,
+        {},
+        {
+          '学号': '班级统计',
+          '姓名': '-',
+          '课程数': '-',
+          '总学分': '-',
+          '加权平均分': cls?.weighted_avg?.toFixed(2) || '0.00',
+          '平均GPA': cls?.avg_gpa?.toFixed(2) || '0.00'
+        }
+      ];
+
+      const ws = XLSX.utils.json_to_sheet(finalData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '排名表');
+      XLSX.writeFile(wb, '学生成绩排名表.xlsx');
+    } catch (err: any) {
+      setError('导出失败: ' + err.message);
+    }
+  };
+
+  // ============ Reset ============
+
+  const handleReset = async () => {
+    try {
+      const studentsList = await fetchStudents();
+      for (const s of studentsList) {
+        await deleteStudent(s.id);
       }
-    ];
-
-    const ws = XLSX.utils.json_to_sheet(finalData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "排名表");
-    XLSX.writeFile(wb, "学生成绩排名表.xlsx");
+      const coursesList = await fetchCourses();
+      for (const c of coursesList) {
+        await deleteCourse(c.name);
+      }
+      setSelectedStudentId(null);
+      await Promise.all([
+        loadStudentsAndStats(),
+        loadCourses(),
+        loadRanking(),
+      ]);
+    } catch (e: any) {
+      setError(e.message);
+    }
   };
 
-  const handleReset = () => {
-    setStudents([]);
-    setSelectedStudentId(null);
-    setGlobalCredits({});
-    localStorage.removeItem('grade-calculator-data');
-  };
+  // ============ Derived Data for Selected Student ============
+
+  const convertedStudentCourses: Course[] = useMemo(() => {
+    if (!studentStats?.grades) return [];
+    return studentStats.grades.map(g => ({
+      id: g.id,
+      name: g.course_name,
+      grade: g.grade,
+      credit: g.credit,
+    }));
+  }, [studentStats]);
+
+  const selectedStudentName = studentDetail?.name || studentStats?.name || '';
+
+  // ============ Render ============
 
   return (
     <div className="flex h-screen overflow-hidden font-sans">
+      {/* Error Toast */}
+      <AnimatePresence>
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-500 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span className="text-sm">{error}</span>
+            <button onClick={() => setError(null)} className="ml-2 hover:text-red-200">
+              <Plus className="w-4 h-4 rotate-45" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Undo Notification */}
       <AnimatePresence>
         {showUndo && (
@@ -257,7 +532,7 @@ export default function App() {
           >
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse"></div>
-              <span className="text-sm font-medium">已删除数据</span>
+              <span className="text-sm font-medium">数据已被删除</span>
             </div>
             <div className="w-px h-4 bg-white/20"></div>
             <button 
@@ -279,7 +554,7 @@ export default function App() {
 
       {/* Sidebar */}
       <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
-        <div className="p-6 border-bottom border-slate-100">
+        <div className="p-6 border-b border-slate-100">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-2 font-bold text-slate-800">
               <GraduationCap className="w-5 h-5 text-blue-600" />
@@ -306,7 +581,7 @@ export default function App() {
               学生列表
             </button>
             <button 
-              onClick={() => setView('courses')}
+              onClick={() => { setView('courses'); loadCourses(); }}
               className={cn(
                 "w-full py-2.5 px-4 rounded-xl flex items-center gap-3 transition-all text-sm font-medium",
                 view === 'courses' ? "bg-blue-600 text-white shadow-md" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
@@ -321,17 +596,18 @@ export default function App() {
 
           <button 
             onClick={handleAddStudent}
-            className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95 mb-4"
+            disabled={loading.students}
+            className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95 mb-4 disabled:opacity-50"
           >
-            <Plus className="w-4 h-4" />
+            {loading.students ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
             添加学生
           </button>
 
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center justify-center gap-2 py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer transition-colors text-sm text-slate-600">
               <FileUp className="w-4 h-4" />
-              导入 Excel
-              <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImportExcel} />
+              {importing ? '导入中...' : '导入 Excel'}
+              <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImportExcel} disabled={importing} />
             </label>
             <button 
               onClick={handleExportRanking}
@@ -343,8 +619,13 @@ export default function App() {
           </div>
         </div>
 
+        {/* Student List */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {view === 'students' ? (
+          {loading.students ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 text-slate-300 animate-spin" />
+            </div>
+          ) : view === 'students' ? (
             students.length === 0 ? (
               <div className="text-center py-10 px-4">
                 <div className="bg-slate-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -371,10 +652,10 @@ export default function App() {
                     </div>
                     <div className="text-right">
                       <span className="text-[10px] bg-white/50 px-1.5 py-0.5 rounded border border-slate-200 block mb-1">
-                        {student.courses.length} 门课
+                        {student.course_count || 0} 门课
                       </span>
                       <span className="text-[10px] font-bold text-blue-600">
-                        GPA: {calculateAverageGPA(student.courses).toFixed(2)}
+                        GPA: {(student.weighted_avg || 0) > 0 ? calculateGPA(student.weighted_avg!).toFixed(2) : '0.00'}
                       </span>
                     </div>
                   </div>
@@ -382,7 +663,7 @@ export default function App() {
                     <motion.div 
                       className="h-full bg-blue-500"
                       initial={{ width: 0 }}
-                      animate={{ width: `${(calculateAverageGPA(student.courses) / 4.0) * 100}%` }}
+                      animate={{ width: `${Math.min(100, (student.weighted_avg || 0))}%` }}
                       transition={{ duration: 0.5 }}
                     />
                   </div>
@@ -398,11 +679,7 @@ export default function App() {
                 </div>
               ))
             )
-          ) : (
-            <div className="px-2 py-4 text-center">
-              <p className="text-xs text-slate-400">切换至课程库管理视图</p>
-            </div>
-          )}
+          ) : null}
         </div>
       </aside>
 
@@ -413,7 +690,6 @@ export default function App() {
             <>
               {/* Header Stats */}
               <div className="grid grid-cols-4 gap-6 mb-8">
-                {/* ... existing stats ... */}
                 <div className="glass-card p-6 flex items-center gap-4">
                   <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 shrink-0">
                     <GraduationCap className="w-6 h-6" />
@@ -421,13 +697,15 @@ export default function App() {
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-slate-400 font-medium mb-1">加权平均分</p>
                     <h2 className="text-2xl font-bold text-slate-800 mb-2">
-                      {selectedStudent ? calculateWeightedAverage(selectedStudent.courses).toFixed(2) : '0.00'}
+                      {selectedStudentId && studentStats
+                        ? studentStats.weighted_avg.toFixed(2)
+                        : '0.00'}
                     </h2>
                     <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <motion.div 
                         className="h-full bg-blue-500"
                         initial={{ width: 0 }}
-                        animate={{ width: `${selectedStudent ? Math.min(100, calculateWeightedAverage(selectedStudent.courses)) : 0}%` }}
+                        animate={{ width: `${selectedStudentId && studentStats ? Math.min(100, studentStats.weighted_avg) : 0}%` }}
                         transition={{ duration: 0.8, ease: "easeOut" }}
                       />
                     </div>
@@ -441,13 +719,13 @@ export default function App() {
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-slate-400 font-medium mb-1">总学分</p>
                     <h2 className="text-2xl font-bold text-slate-800 mb-2">
-                      {selectedStudent ? selectedStudent.courses.reduce((sum, c) => sum + Number(c.credit), 0).toFixed(1) : '0.0'}
+                      {selectedStudentId && studentStats ? studentStats.total_credits.toFixed(1) : '0.0'}
                     </h2>
                     <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <motion.div 
                         className="h-full bg-emerald-500"
                         initial={{ width: 0 }}
-                        animate={{ width: `${selectedStudent ? Math.min(100, (selectedStudent.courses.reduce((sum, c) => sum + Number(c.credit), 0) / 160) * 100) : 0}%` }}
+                        animate={{ width: `${selectedStudentId && studentStats ? Math.min(100, (studentStats.total_credits / 160) * 100) : 0}%` }}
                         transition={{ duration: 0.8, ease: "easeOut" }}
                       />
                     </div>
@@ -462,17 +740,17 @@ export default function App() {
                     <p className="text-xs text-slate-400 font-medium mb-1">班级概况</p>
                     <div className="flex items-baseline gap-2 mb-2">
                       <h2 className="text-2xl font-bold text-slate-800">
-                        {calculateClassAverage(students).toFixed(1)}
+                        {classStats ? classStats.weighted_avg.toFixed(1) : '0.0'}
                       </h2>
                       <span className="text-xs text-slate-400 font-mono font-bold text-purple-600">
-                        GPA: {calculateClassAverageGPA(students).toFixed(2)}
+                        GPA: {classStats ? classStats.avg_gpa.toFixed(2) : '0.00'}
                       </span>
                     </div>
                     <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <motion.div 
                         className="h-full bg-purple-500"
                         initial={{ width: 0 }}
-                        animate={{ width: `${(calculateClassAverageGPA(students) / 4.0) * 100}%` }}
+                        animate={{ width: `${classStats ? Math.min(100, (classStats.avg_gpa / 4.0) * 100) : 0}%` }}
                         transition={{ duration: 0.8, ease: "easeOut" }}
                       />
                     </div>
@@ -480,7 +758,7 @@ export default function App() {
                 </div>
 
                 <button 
-                  onClick={() => setView('courses')}
+                  onClick={() => { setView('courses'); loadCourses(); }}
                   className="glass-card p-6 flex items-center gap-4 hover:bg-slate-50 transition-colors text-left group"
                 >
                   <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600 group-hover:rotate-45 transition-transform">
@@ -495,33 +773,42 @@ export default function App() {
                 </button>
               </div>
 
-              {selectedStudent ? (
+              {selectedStudentId ? (
                 <div className="grid grid-cols-12 gap-8">
                   {/* Left Column: Editor & Table */}
                   <div className="col-span-8 space-y-8">
                     <StudentDetails 
-                      student={selectedStudent} 
-                      onUpdate={handleUpdateStudent} 
-                      globalCredits={globalCredits}
+                      studentId={selectedStudentId}
+                      studentName={selectedStudentName}
+                      courses={convertedStudentCourses}
+                      onUpdateName={(name) => handleUpdateStudentName(selectedStudentId, name)}
+                      onAddCourse={(name, grade) => handleAddCourseToStudent(selectedStudentId, name, grade)}
+                      loading={loading.detail}
                     />
                     <GradeTable 
-                      student={selectedStudent} 
-                      onUpdate={handleUpdateStudent} 
+                      courses={convertedStudentCourses}
+                      onUpdateGrade={(courseName, grade) => handleUpdateGrade(selectedStudentId, courseName, grade)}
+                      onDeleteGrade={(courseName) => handleDeleteGrade(selectedStudentId, courseName)}
+                      onClearAll={() => handleClearGrades(selectedStudentId)}
+                      loading={loading.detail}
                     />
                   </div>
 
                   {/* Right Column: Charts & Summary */}
                   <div className="col-span-4 space-y-6">
-                    <GPAComparison student={selectedStudent} students={students} />
-                    <GradeDistribution student={selectedStudent} />
+                    <GPAChart 
+                      studentGPA={studentStats?.avg_gpa || 0}
+                      classGPA={classStats?.avg_gpa || 0}
+                    />
+                    <GradeDistribution grades={convertedStudentCourses} />
                     
                     <div className="glass-card p-6 bg-blue-600 text-white border-none">
                       <div className="flex items-center gap-2 mb-4">
                         <Save className="w-4 h-4" />
-                        <h3 className="font-semibold">自动保存</h3>
+                        <h3 className="font-semibold">数据存储</h3>
                       </div>
                       <p className="text-xs text-blue-100 leading-relaxed mb-6">
-                        当前数据存储在浏览器内存中，刷新页面会丢失。请及时导出 Excel 保存。
+                        所有数据已持久化存储在后端数据库中，关闭页面不会丢失。
                       </p>
                       
                       <div className="space-y-6">
@@ -529,35 +816,17 @@ export default function App() {
                           <div className="space-y-1">
                             <span className="text-sm text-blue-100 block">及格率</span>
                             <span className="text-3xl font-bold">
-                              {selectedStudent.courses.length > 0 
-                                ? Math.round((selectedStudent.courses.filter(c => Number(c.grade) >= 60).length / selectedStudent.courses.length) * 100)
-                                : 0}%
+                              {studentStats ? studentStats.pass_rate : 0}%
                             </span>
                           </div>
                           <div className="relative w-20 h-20 flex items-center justify-center">
                             <svg className="w-full h-full transform -rotate-90">
-                              <circle
-                                cx="40"
-                                cy="40"
-                                r="34"
-                                stroke="rgba(255,255,255,0.1)"
-                                strokeWidth="6"
-                                fill="transparent"
-                              />
+                              <circle cx="40" cy="40" r="34" stroke="rgba(255,255,255,0.1)" strokeWidth="6" fill="transparent" />
                               <motion.circle
-                                cx="40"
-                                cy="40"
-                                r="34"
-                                stroke="white"
-                                strokeWidth="6"
-                                fill="transparent"
+                                cx="40" cy="40" r="34" stroke="white" strokeWidth="6" fill="transparent"
                                 strokeDasharray={2 * Math.PI * 34}
                                 initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
-                                animate={{ 
-                                  strokeDashoffset: 2 * Math.PI * 34 * (1 - (selectedStudent.courses.length > 0 
-                                    ? (selectedStudent.courses.filter(c => Number(c.grade) >= 60).length / selectedStudent.courses.length)
-                                    : 0)) 
-                                }}
+                                animate={{ strokeDashoffset: 2 * Math.PI * 34 * (1 - (studentStats ? studentStats.pass_rate / 100 : 0)) }}
                                 transition={{ duration: 1, ease: "easeOut" }}
                                 strokeLinecap="round"
                               />
@@ -574,31 +843,17 @@ export default function App() {
                           <div className="space-y-1">
                             <span className="text-sm text-blue-100 block">平均 GPA (4.0)</span>
                             <span className="text-3xl font-bold">
-                              {calculateAverageGPA(selectedStudent.courses).toFixed(2)}
+                              {studentStats ? studentStats.avg_gpa.toFixed(2) : '0.00'}
                             </span>
                           </div>
                           <div className="relative w-20 h-20 flex items-center justify-center">
                             <svg className="w-full h-full transform -rotate-90">
-                              <circle
-                                cx="40"
-                                cy="40"
-                                r="34"
-                                stroke="rgba(255,255,255,0.1)"
-                                strokeWidth="6"
-                                fill="transparent"
-                              />
+                              <circle cx="40" cy="40" r="34" stroke="rgba(255,255,255,0.1)" strokeWidth="6" fill="transparent" />
                               <motion.circle
-                                cx="40"
-                                cy="40"
-                                r="34"
-                                stroke="white"
-                                strokeWidth="6"
-                                fill="transparent"
+                                cx="40" cy="40" r="34" stroke="white" strokeWidth="6" fill="transparent"
                                 strokeDasharray={2 * Math.PI * 34}
                                 initial={{ strokeDashoffset: 2 * Math.PI * 34 }}
-                                animate={{ 
-                                  strokeDashoffset: 2 * Math.PI * 34 * (1 - (calculateAverageGPA(selectedStudent.courses) / 4.0)) 
-                                }}
+                                animate={{ strokeDashoffset: 2 * Math.PI * 34 * (1 - ((studentStats?.avg_gpa || 0) / 4.0)) }}
                                 transition={{ duration: 1, ease: "easeOut" }}
                                 strokeLinecap="round"
                               />
@@ -624,12 +879,14 @@ export default function App() {
             </>
           ) : (
             <CourseManagementPage 
-              students={students}
-              setStudents={setStudents}
-              globalCredits={globalCredits}
-              setGlobalCredits={setGlobalCredits}
-              triggerUndoableAction={triggerUndoableAction}
-              onBack={() => setView('students')}
+              courses={courses}
+              onUpdateCredit={handleUpdateCourseCredit}
+                  onAddCourse={handleAddCourseGlobal}
+                  onDeleteCourse={handleDeleteCourseGlobal}
+                  onBack={() => setView('students')}
+                  loading={loading.courses}
+                  students={students}
+                  onRefresh={() => { loadCourses(); loadStudentsAndStats(); }}
             />
           )}
         </div>
@@ -638,272 +895,41 @@ export default function App() {
   );
 }
 
-function CourseManagementPage({ 
-  students, 
-  setStudents, 
-  globalCredits, 
-  setGlobalCredits,
-  triggerUndoableAction,
-  onBack
-}: { 
-  students: Student[]; 
-  setStudents: React.Dispatch<React.SetStateAction<Student[]>>;
-  globalCredits: Record<string, number | string>;
-  setGlobalCredits: React.Dispatch<React.SetStateAction<Record<string, number | string>>>;
-  triggerUndoableAction: (newStudents: Student[], newCredits: Record<string, number | string>) => void;
-  onBack: () => void;
+// ============ Sub-components ============
+
+function StudentDetails({
+  studentId,
+  studentName,
+  courses,
+  onUpdateName,
+  onAddCourse,
+  loading,
+}: {
+  studentId: string;
+  studentName: string;
+  courses: Course[];
+  onUpdateName: (name: string) => void;
+  onAddCourse: (name: string, grade: number) => void;
+  loading: boolean;
 }) {
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<string[]>([]);
-  const [batchCredit, setBatchCredit] = useState<string>('');
+  const [name, setName] = useState(studentName);
+  const [newCourse, setNewCourse] = useState({ name: '', grade: 95 });
 
-  const filteredCourses = useMemo(() => {
-    return Object.entries(globalCredits).filter(([name]) => 
-      name.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [globalCredits, search]);
+  useEffect(() => setName(studentName), [studentName]);
 
-  const handleBatchDelete = () => {
-    if (selected.length === 0) return;
-    const newCredits = { ...globalCredits };
-    selected.forEach(name => delete newCredits[name]);
-    const newStudents = students.map(s => ({
-      ...s,
-      courses: s.courses.filter(c => !selected.includes(c.name))
-    }));
-    
-    triggerUndoableAction(newStudents, newCredits);
-    setSelected([]);
-  };
-
-  const handleBatchUpdateCredit = () => {
-    const val = parseFloat(batchCredit);
-    if (isNaN(val) || selected.length === 0) return;
-    
-    const newCredits = { ...globalCredits };
-    selected.forEach(name => {
-      newCredits[name] = val;
-    });
-    setGlobalCredits(newCredits);
-    
-    setStudents(prev => prev.map(s => ({
-      ...s,
-      courses: s.courses.map(c => selected.includes(c.name) ? { ...c, credit: val } : c)
-    })));
-    
-    setBatchCredit('');
-    setSelected([]);
-  };
-
-  const handleKeepCommon = () => {
-    const courseCounts: Record<string, number> = {};
-    students.forEach(s => {
-      s.courses.forEach(c => {
-        courseCounts[c.name] = (courseCounts[c.name] || 0) + 1;
-      });
-    });
-    const commonCourses = Object.keys(courseCounts).filter(name => courseCounts[name] === students.length);
-    setStudents(prev => prev.map(s => ({
-      ...s,
-      courses: s.courses.filter(c => commonCourses.includes(c.name))
-    })));
-    // Also update global credits to only include common ones
-    const newCredits: Record<string, number | string> = {};
-    commonCourses.forEach(name => {
-      newCredits[name] = globalCredits[name] || 1;
-    });
-    setGlobalCredits(newCredits);
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-white rounded-full transition-colors">
-            <RotateCcw className="w-5 h-5 text-slate-400 rotate-90" />
-          </button>
-          <h2 className="text-2xl font-bold text-slate-800">课程库管理</h2>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className={cn(
-            "flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5 transition-all",
-            selected.length > 0 ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4 pointer-events-none"
-          )}>
-            <span className="text-xs text-slate-400 whitespace-nowrap">批量设学分:</span>
-            <input 
-              type="number" 
-              placeholder="学分"
-              value={batchCredit}
-              onChange={(e) => setBatchCredit(e.target.value)}
-              className="w-16 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-blue-400"
-            />
-            <button 
-              onClick={handleBatchUpdateCredit}
-              className="bg-blue-600 text-white p-1.5 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Save className="w-4 h-4" />
-            </button>
-          </div>
-
-          <button 
-            onClick={handleKeepCommon}
-            className="px-4 py-2 bg-amber-50 text-amber-600 rounded-xl text-sm font-medium hover:bg-amber-100 transition-colors border border-amber-100"
-          >
-            仅保留共有课程
-          </button>
-          <button 
-            disabled={selected.length === 0}
-            onClick={handleBatchDelete}
-            className={cn(
-              "px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2",
-              selected.length > 0 ? "bg-red-500 text-white shadow-md" : "bg-slate-200 text-slate-400 cursor-not-allowed"
-            )}
-          >
-            <Trash2 className="w-4 h-4" />
-            批量删除已选 ({selected.length})
-          </button>
-        </div>
-      </div>
-
-      <div className="glass-card p-6">
-        <div className="flex items-center gap-4 mb-6">
-          <div className="flex-1 relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input 
-              type="text" 
-              placeholder="搜索课程名称..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-11 pr-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-            />
-          </div>
-          <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-50 px-4 py-3 rounded-xl border border-slate-100">
-            <BookOpen className="w-4 h-4" />
-            共识别 {Object.keys(globalCredits).length} 门课程
-          </div>
-        </div>
-
-        <div className="overflow-hidden rounded-2xl border border-slate-100">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-bold tracking-wider">
-              <tr>
-                <th className="px-6 py-4 w-12">
-                  <input 
-                    type="checkbox" 
-                    checked={selected.length === filteredCourses.length && filteredCourses.length > 0}
-                    onChange={(e) => {
-                      if (e.target.checked) setSelected(filteredCourses.map(([name]) => name));
-                      else setSelected([]);
-                    }}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                </th>
-                <th className="px-6 py-4">课程名称</th>
-                <th className="px-6 py-4 text-center">选修人数</th>
-                <th className="px-6 py-4 text-center">当前学分</th>
-                <th className="px-6 py-4 text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {filteredCourses.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                    未找到匹配的课程
-                  </td>
-                </tr>
-              ) : (
-                filteredCourses.map(([name, credit]) => {
-                  const count = students.filter(s => s.courses.some(c => c.name === name)).length;
-                  const isSelected = selected.includes(name);
-                  return (
-                    <tr key={name} className={cn("hover:bg-slate-50/50 transition-colors", isSelected && "bg-blue-50/30")}>
-                      <td className="px-6 py-4">
-                        <input 
-                          type="checkbox" 
-                          checked={isSelected}
-                          onChange={(e) => {
-                            if (e.target.checked) setSelected([...selected, name]);
-                            else setSelected(selected.filter(n => n !== name));
-                          }}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                      </td>
-                      <td className="px-6 py-4 font-medium text-slate-700">{name}</td>
-                      <td className="px-6 py-4 text-center">
-                        <span className={cn(
-                          "px-2 py-1 rounded-full text-[10px] font-bold",
-                          count === students.length ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500"
-                        )}>
-                          {count} / {students.length} 人
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <input 
-                          type="number" 
-                          value={credit}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setGlobalCredits(prev => ({ ...prev, [name]: val }));
-                            setStudents(prev => prev.map(s => ({
-                              ...s,
-                              courses: s.courses.map(c => c.name === name ? { ...c, credit: val } : c)
-                            })));
-                          }}
-                          className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center focus:border-blue-400 outline-none"
-                        />
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button 
-                          onClick={() => {
-                            const newCredits = { ...globalCredits };
-                            delete newCredits[name];
-                            const newStudents = students.map(s => ({
-                              ...s,
-                              courses: s.courses.filter(c => c.name !== name)
-                            }));
-                            triggerUndoableAction(newStudents, newCredits);
-                          }}
-                          className="p-2 text-slate-300 hover:text-red-500 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-function StudentDetails({ 
-  student, 
-  onUpdate, 
-  globalCredits 
-}: { 
-  student: Student; 
-  onUpdate: (s: Student) => void; 
-  globalCredits: Record<string, number> 
-}) {
-  const [newCourse, setNewCourse] = useState({ name: '', grade: 95, credit: 1 });
-
-  const handleAddCourse = () => {
+  const handleAdd = () => {
     if (!newCourse.name) return;
-    const course: Course = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: newCourse.name,
-      grade: newCourse.grade,
-      credit: globalCredits[newCourse.name] || newCourse.credit
-    };
-    onUpdate({
-      ...student,
-      courses: [...student.courses, course]
-    });
-    setNewCourse({ name: '', grade: 95, credit: 1 });
+    onAddCourse(newCourse.name, newCourse.grade);
+    setNewCourse({ name: '', grade: 95 });
   };
+
+  if (loading) {
+    return (
+      <div className="glass-card p-8 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="glass-card p-8">
@@ -917,8 +943,9 @@ function StudentDetails({
           <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">姓名</label>
           <input 
             type="text" 
-            value={student.name}
-            onChange={(e) => onUpdate({ ...student, name: e.target.value })}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={() => name !== studentName && onUpdateName(name)}
             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none"
           />
         </div>
@@ -926,9 +953,9 @@ function StudentDetails({
           <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">学号</label>
           <input 
             type="text" 
-            value={student.id}
-            onChange={(e) => onUpdate({ ...student, id: e.target.value })}
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-mono"
+            value={studentId}
+            disabled
+            className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 outline-none font-mono text-slate-500"
           />
         </div>
       </div>
@@ -949,21 +976,12 @@ function StudentDetails({
           <input 
             type="number" 
             value={newCourse.grade}
-            onChange={(e) => setNewCourse({ ...newCourse, grade: e.target.value })}
-            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-400 transition-all text-center"
-          />
-        </div>
-        <div className="w-20 space-y-2">
-          <label className="text-[10px] font-bold text-slate-400 uppercase">学分</label>
-          <input 
-            type="number" 
-            value={globalCredits[newCourse.name] !== undefined ? globalCredits[newCourse.name] : newCourse.credit}
-            onChange={(e) => setNewCourse({ ...newCourse, credit: e.target.value })}
+            onChange={(e) => setNewCourse({ ...newCourse, grade: parseInt(e.target.value) || 0 })}
             className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-400 transition-all text-center"
           />
         </div>
         <button 
-          onClick={handleAddCourse}
+          onClick={handleAdd}
           className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 font-medium text-sm"
         >
           <Plus className="w-4 h-4" />
@@ -974,33 +992,33 @@ function StudentDetails({
   );
 }
 
-function GradeTable({ 
-  student, 
-  onUpdate 
-}: { 
-  student: Student; 
-  onUpdate: (s: Student) => void 
+function GradeTable({
+  courses,
+  onUpdateGrade,
+  onDeleteGrade,
+  onClearAll,
+  loading,
+}: {
+  courses: Course[];
+  onUpdateGrade: (courseName: string, grade: number) => void;
+  onDeleteGrade: (courseName: string) => void;
+  onClearAll: () => void;
+  loading: boolean;
 }) {
-  const handleDeleteCourse = (courseId: string) => {
-    onUpdate({
-      ...student,
-      courses: student.courses.filter(c => c.id !== courseId)
-    });
-  };
-
-  const handleUpdateCourse = (courseId: string, field: keyof Course, value: any) => {
-    onUpdate({
-      ...student,
-      courses: student.courses.map(c => c.id === courseId ? { ...c, [field]: value } : c)
-    });
-  };
+  if (loading) {
+    return (
+      <div className="glass-card p-8 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="glass-card overflow-hidden">
       <div className="p-6 border-b border-slate-100 flex justify-between items-center">
         <h3 className="font-bold text-slate-800">成绩单</h3>
         <button 
-          onClick={() => onUpdate({ ...student, courses: [] })}
+          onClick={onClearAll}
           className="text-xs text-red-500 hover:underline flex items-center gap-1"
         >
           <RotateCcw className="w-3 h-3" />
@@ -1020,21 +1038,21 @@ function GradeTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {student.courses.length === 0 ? (
+            {courses.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-6 py-10 text-center text-slate-400">
+                <td colSpan={6} className="px-6 py-10 text-center text-slate-400">
                   暂无课程数据，请手动添加或导入 Excel
                 </td>
               </tr>
             ) : (
-              student.courses.map(course => (
+              courses.map(course => (
                 <tr key={course.id} className="hover:bg-slate-50/50 transition-colors group">
                   <td className="px-6 py-4 font-medium text-slate-700">{course.name}</td>
                   <td className="px-6 py-4 text-center">
                     <input 
                       type="number" 
                       value={course.grade}
-                      onChange={(e) => handleUpdateCourse(course.id, 'grade', e.target.value)}
+                      onChange={(e) => onUpdateGrade(course.name, parseInt(e.target.value) || 0)}
                       className={cn(
                         "w-16 py-1 rounded-lg text-center font-bold border border-transparent focus:border-blue-300 outline-none transition-all",
                         Number(course.grade) >= 90 ? "bg-emerald-50 text-emerald-600" :
@@ -1044,12 +1062,7 @@ function GradeTable({
                     />
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <input 
-                      type="number" 
-                      value={course.credit}
-                      onChange={(e) => handleUpdateCourse(course.id, 'credit', e.target.value)}
-                      className="w-12 py-1 bg-transparent text-center text-slate-500 border border-transparent focus:border-slate-200 rounded-lg outline-none"
-                    />
+                    <span className="text-slate-500">{course.credit}</span>
                   </td>
                   <td className="px-6 py-4 text-center font-mono text-blue-600 font-bold">
                     {calculateGPA(course.grade).toFixed(1)}
@@ -1059,7 +1072,7 @@ function GradeTable({
                   </td>
                   <td className="px-6 py-4 text-right">
                     <button 
-                      onClick={() => handleDeleteCourse(course.id)}
+                      onClick={() => onDeleteGrade(course.name)}
                       className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1075,9 +1088,7 @@ function GradeTable({
   );
 }
 
-function GPAComparison({ student, students }: { student: Student, students: Student[] }) {
-  const studentGPA = calculateAverageGPA(student.courses);
-  const classGPA = calculateClassAverageGPA(students);
+function GPAChart({ studentGPA, classGPA }: { studentGPA: number; classGPA: number }) {
   const maxGPA = 4.0;
 
   return (
@@ -1090,26 +1101,12 @@ function GPAComparison({ student, students }: { student: Student, students: Stud
       <div className="flex justify-center mb-8">
         <div className="relative w-32 h-32 flex items-center justify-center">
           <svg className="w-full h-full transform -rotate-90">
-            <circle
-              cx="64"
-              cy="64"
-              r="58"
-              stroke="#f1f5f9"
-              strokeWidth="8"
-              fill="transparent"
-            />
+            <circle cx="64" cy="64" r="58" stroke="#f1f5f9" strokeWidth="8" fill="transparent" />
             <motion.circle
-              cx="64"
-              cy="64"
-              r="58"
-              stroke="#3b82f6"
-              strokeWidth="8"
-              fill="transparent"
+              cx="64" cy="64" r="58" stroke="#3b82f6" strokeWidth="8" fill="transparent"
               strokeDasharray={2 * Math.PI * 58}
               initial={{ strokeDashoffset: 2 * Math.PI * 58 }}
-              animate={{ 
-                strokeDashoffset: 2 * Math.PI * 58 * (1 - (studentGPA / maxGPA)) 
-              }}
+              animate={{ strokeDashoffset: 2 * Math.PI * 58 * (1 - (studentGPA / maxGPA)) }}
               transition={{ duration: 1.5, ease: "easeOut" }}
               strokeLinecap="round"
             />
@@ -1159,14 +1156,14 @@ function GPAComparison({ student, students }: { student: Student, students: Stud
   );
 }
 
-function GradeDistribution({ student }: { student: Student }) {
+function GradeDistribution({ grades }: { grades: Course[] }) {
   const data = useMemo(() => {
     const counts = {
-      excellent: student.courses.filter(c => Number(c.grade) >= 90).length,
-      good: student.courses.filter(c => Number(c.grade) >= 80 && Number(c.grade) < 90).length,
-      fair: student.courses.filter(c => Number(c.grade) >= 70 && Number(c.grade) < 80).length,
-      pass: student.courses.filter(c => Number(c.grade) >= 60 && Number(c.grade) < 70).length,
-      fail: student.courses.filter(c => Number(c.grade) < 60).length,
+      excellent: grades.filter(c => Number(c.grade) >= 90).length,
+      good: grades.filter(c => Number(c.grade) >= 80 && Number(c.grade) < 90).length,
+      fair: grades.filter(c => Number(c.grade) >= 70 && Number(c.grade) < 80).length,
+      pass: grades.filter(c => Number(c.grade) >= 60 && Number(c.grade) < 70).length,
+      fail: grades.filter(c => Number(c.grade) < 60).length,
     };
 
     return [
@@ -1176,7 +1173,7 @@ function GradeDistribution({ student }: { student: Student }) {
       { name: '及格 (60-69)', value: counts.pass, color: '#64748b' },
       { name: '不及格 (<60)', value: counts.fail, color: '#ef4444' },
     ].filter(d => d.value > 0);
-  }, [student.courses]);
+  }, [grades]);
 
   return (
     <div className="glass-card p-6">
@@ -1213,6 +1210,269 @@ function GradeDistribution({ student }: { student: Student }) {
             <span className="font-bold text-slate-700">{item.value}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ============ Course Management Page ============
+
+function CourseManagementPage({
+  courses,
+  onUpdateCredit,
+  onAddCourse,
+  onDeleteCourse,
+  onBack,
+  loading,
+  students,
+  onRefresh,
+}: {
+  courses: CourseRecord[];
+  onUpdateCredit: (name: string, credit: number) => void;
+  onAddCourse: (name: string, credit: number) => void;
+  onDeleteCourse: (name: string) => void;
+  onBack: () => void;
+  loading: boolean;
+  students: StudentRecord[];
+  onRefresh: () => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [batchCredit, setBatchCredit] = useState('');
+  const [newCourseName, setNewCourseName] = useState('');
+  const [newCourseCredit, setNewCourseCredit] = useState(1);
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  const filteredCourses = courses.filter(c => 
+    c.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleBatchDelete = () => {
+    if (selected.length === 0) return;
+    selected.forEach(name => onDeleteCourse(name));
+    setSelected([]);
+  };
+
+  const handleBatchUpdateCredit = () => {
+    const val = parseFloat(batchCredit);
+    if (isNaN(val) || selected.length === 0) return;
+    selected.forEach(name => onUpdateCredit(name, val));
+    setBatchCredit('');
+    setSelected([]);
+  };
+
+  const handleAddNewCourse = () => {
+    if (!newCourseName) return;
+    onAddCourse(newCourseName, newCourseCredit);
+    setNewCourseName('');
+    setNewCourseCredit(1);
+    setShowAddForm(false);
+  };
+
+  const handleKeepCommon = () => {
+    if (students.length === 0) return;
+    // We can't easily get course names from all students via the side panel,
+    // so just refresh
+    onRefresh();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-white rounded-full transition-colors">
+            <RotateCcw className="w-5 h-5 text-slate-400 rotate-90" />
+          </button>
+          <h2 className="text-2xl font-bold text-slate-800">课程库管理</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className={cn(
+            "flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5 transition-all",
+            selected.length > 0 ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4 pointer-events-none"
+          )}>
+            <span className="text-xs text-slate-400 whitespace-nowrap">批量设学分:</span>
+            <input 
+              type="number" 
+              placeholder="学分"
+              value={batchCredit}
+              onChange={(e) => setBatchCredit(e.target.value)}
+              className="w-16 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1 text-xs text-center outline-none focus:border-blue-400"
+            />
+            <button 
+              onClick={handleBatchUpdateCredit}
+              className="bg-blue-600 text-white p-1.5 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Save className="w-4 h-4" />
+            </button>
+          </div>
+
+          <button 
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-100 transition-colors border border-blue-100 flex items-center gap-1"
+          >
+            <Plus className="w-4 h-4" />
+            手动添加课程
+          </button>
+          <button 
+            disabled={selected.length === 0}
+            onClick={handleBatchDelete}
+            className={cn(
+              "px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2",
+              selected.length > 0 ? "bg-red-500 text-white shadow-md" : "bg-slate-200 text-slate-400 cursor-not-allowed"
+            )}
+          >
+            <Trash2 className="w-4 h-4" />
+            批量删除已选 ({selected.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Add New Course Form */}
+      <AnimatePresence>
+        {showAddForm && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="glass-card p-6 mb-4">
+              <div className="flex items-end gap-4">
+                <div className="flex-1 space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase">课程名称</label>
+                  <input 
+                    type="text" 
+                    placeholder="输入课程名称"
+                    value={newCourseName}
+                    onChange={(e) => setNewCourseName(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-400 transition-all"
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddNewCourse()}
+                  />
+                </div>
+                <div className="w-24 space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase">学分</label>
+                  <input 
+                    type="number" 
+                    value={newCourseCredit}
+                    onChange={(e) => setNewCourseCredit(parseFloat(e.target.value) || 1)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-400 transition-all text-center"
+                  />
+                </div>
+                <button 
+                  onClick={handleAddNewCourse}
+                  className="bg-blue-600 text-white px-6 py-2.5 rounded-xl flex items-center gap-2 transition-all active:scale-95 font-medium text-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  添加
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="glass-card p-6">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="flex-1 relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input 
+              type="text" 
+              placeholder="搜索课程名称..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-11 pr-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-50 px-4 py-3 rounded-xl border border-slate-100">
+            <BookOpen className="w-4 h-4" />
+            共 {courses.length} 门课程
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-slate-100">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-bold tracking-wider">
+                <tr>
+                  <th className="px-6 py-4 w-12">
+                    <input 
+                      type="checkbox" 
+                      checked={selected.length === filteredCourses.length && filteredCourses.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelected(filteredCourses.map(c => c.name));
+                        else setSelected([]);
+                      }}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
+                  <th className="px-6 py-4">课程名称</th>
+                  <th className="px-6 py-4 text-center">选修人数</th>
+                  <th className="px-6 py-4 text-center">当前学分</th>
+                  <th className="px-6 py-4 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredCourses.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
+                      未找到匹配的课程
+                    </td>
+                  </tr>
+                ) : (
+                  filteredCourses.map(course => {
+                    const isSelected = selected.includes(course.name);
+                    return (
+                      <tr key={course.name} className={cn("hover:bg-slate-50/50 transition-colors", isSelected && "bg-blue-50/30")}>
+                        <td className="px-6 py-4">
+                          <input 
+                            type="checkbox" 
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) setSelected([...selected, course.name]);
+                              else setSelected(selected.filter(n => n !== course.name));
+                            }}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-6 py-4 font-medium text-slate-700">{course.name}</td>
+                        <td className="px-6 py-4 text-center">
+                          <span className={cn(
+                            "px-2 py-1 rounded-full text-[10px] font-bold",
+                            (course.student_count || 0) === students.length && students.length > 0
+                              ? "bg-emerald-50 text-emerald-600"
+                              : "bg-slate-100 text-slate-500"
+                          )}>
+                            {course.student_count || 0} / {students.length} 人
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <input 
+                            type="number" 
+                            value={course.credit}
+                            onChange={(e) => onUpdateCredit(course.name, parseFloat(e.target.value) || 1)}
+                            className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center focus:border-blue-400 outline-none"
+                          />
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button 
+                            onClick={() => onDeleteCourse(course.name)}
+                            className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
