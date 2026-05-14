@@ -429,12 +429,16 @@ export default function App() {
 
   // ============ Export ============
 
-  const handleExportRanking = async () => {
+  const handleExportRanking = async (sortBy: 'weighted' | 'gpa' = 'weighted') => {
     try {
       const cls = classStats || await fetchClassStats().catch(() => null);
-      const rank = ranking.length > 0 ? ranking : await fetchRanking().catch(() => []);
+      const rank = await fetchRanking(sortBy);
 
-      const rankingData = rank.map(r => ({
+      const title = sortBy === 'gpa' ? 'GPA 排名表' : '加权平均分排名表';
+      const fileName = sortBy === 'gpa' ? '学生GPA排名表.xlsx' : '学生加权平均分排名表.xlsx';
+
+      const rankingData = rank.map((r, i) => ({
+        '排名': i + 1,
         '学号': r.student_id,
         '姓名': r.student_name,
         '课程数': r.course_count,
@@ -447,6 +451,7 @@ export default function App() {
         ...rankingData,
         {},
         {
+          '排名': '',
           '学号': '班级统计',
           '姓名': '-',
           '课程数': '-',
@@ -458,8 +463,8 @@ export default function App() {
 
       const ws = XLSX.utils.json_to_sheet(finalData);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, '排名表');
-      XLSX.writeFile(wb, '学生成绩排名表.xlsx');
+      XLSX.utils.book_append_sheet(wb, ws, title);
+      XLSX.writeFile(wb, fileName);
     } catch (err: any) {
       setError('导出失败: ' + err.message);
     }
@@ -613,11 +618,18 @@ export default function App() {
               <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImportExcel} disabled={importing} />
             </label>
             <button 
-              onClick={handleExportRanking}
+              onClick={() => handleExportRanking('weighted')}
               className="flex items-center justify-center gap-2 py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors text-sm text-slate-600"
             >
               <FileDown className="w-4 h-4" />
-              导出排名
+              按加权平均分导出
+            </button>
+            <button 
+              onClick={() => handleExportRanking('gpa')}
+              className="flex items-center justify-center gap-2 py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors text-sm text-slate-600"
+            >
+              <FileDown className="w-4 h-4" />
+              按 GPA 导出
             </button>
           </div>
         </div>
@@ -785,6 +797,7 @@ export default function App() {
                       studentName={selectedStudentName}
                       courses={convertedStudentCourses}
                       onUpdateName={(name) => handleUpdateStudentName(selectedStudentId, name)}
+                      onUpdateId={(newId) => handleUpdateStudentId(selectedStudentId, newId)}
                       onAddCourse={(name, grade) => handleAddCourseToStudent(selectedStudentId, name, grade)}
                       loading={loading.detail}
                     />
@@ -905,6 +918,7 @@ function StudentDetails({
   studentName,
   courses,
   onUpdateName,
+  onUpdateId,
   onAddCourse,
   loading,
 }: {
@@ -912,13 +926,16 @@ function StudentDetails({
   studentName: string;
   courses: Course[];
   onUpdateName: (name: string) => void;
+  onUpdateId: (id: string) => void;
   onAddCourse: (name: string, grade: number) => void;
   loading: boolean;
 }) {
   const [name, setName] = useState(studentName);
+  const [editId, setEditId] = useState(studentId);
   const [newCourse, setNewCourse] = useState({ name: '', grade: 95 });
 
   useEffect(() => setName(studentName), [studentName]);
+  useEffect(() => setEditId(studentId), [studentId]);
 
   const handleAdd = () => {
     if (!newCourse.name) return;
@@ -956,9 +973,10 @@ function StudentDetails({
           <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">学号</label>
           <input 
             type="text" 
-            value={studentId}
-            disabled
-            className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 outline-none font-mono text-slate-500"
+            value={editId}
+            onChange={(e) => setEditId(e.target.value)}
+            onBlur={() => editId !== studentId && onUpdateId(editId)}
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-mono"
           />
         </div>
       </div>

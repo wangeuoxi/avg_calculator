@@ -28,7 +28,7 @@ router.post('/', async (req: Request, res: Response) => {
   const existing = getRow(db, 'SELECT * FROM courses WHERE name = ?', [name]);
   if (existing) {
     runSql(db,
-      "UPDATE courses SET credit = ?, updated_at = datetime('now', 'localtime') WHERE name = ?",
+      "UPDATE courses SET credit = ?, updated_at = NOW() WHERE name = ?",
       [credit ?? 1, name]
     );
   } else {
@@ -51,12 +51,12 @@ router.put('/:name', async (req: Request, res: Response) => {
   }
 
   const result = runSql(db,
-    "UPDATE courses SET credit = ?, updated_at = datetime('now', 'localtime') WHERE name = ?",
+    "UPDATE courses SET credit = ?, updated_at = NOW() WHERE name = ?",
     [credit, req.params.name]
   );
 
   if (result.changes === 0) {
-    res.status(404).json({ error: '课程不存在' });
+    res.status(404).json({ error: '课程不存�? });
     return;
   }
 
@@ -72,7 +72,7 @@ router.delete('/:name', async (req: Request, res: Response) => {
   const result = runSql(db, 'DELETE FROM courses WHERE name = ?', [req.params.name]);
 
   if (result.changes === 0) {
-    res.status(404).json({ error: '课程不存在' });
+    res.status(404).json({ error: '课程不存�? });
     return;
   }
 

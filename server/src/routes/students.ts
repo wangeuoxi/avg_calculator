@@ -26,7 +26,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   const db = await getDb();
   const student = getRow(db, 'SELECT * FROM students WHERE id = ?', [req.params.id]);
   if (!student) {
-    res.status(404).json({ error: '学生不存在' });
+    res.status(404).json({ error: '学生不存�? });
     return;
   }
 
@@ -47,7 +47,7 @@ router.post('/', async (req: Request, res: Response) => {
   const { id, name } = req.body;
 
   if (!id || !name) {
-    res.status(400).json({ error: '学号和姓名不能为空' });
+    res.status(400).json({ error: '学号和姓名不能为�? });
     return;
   }
 
@@ -75,12 +75,12 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 
   const result = runSql(db,
-    "UPDATE students SET name = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+    "UPDATE students SET name = ?, updated_at = NOW() WHERE id = ?",
     [name, req.params.id]
   );
 
   if (result.changes === 0) {
-    res.status(404).json({ error: '学生不存在' });
+    res.status(404).json({ error: '学生不存�? });
     return;
   }
 
@@ -96,7 +96,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   const result = runSql(db, 'DELETE FROM students WHERE id = ?', [req.params.id]);
 
   if (result.changes === 0) {
-    res.status(404).json({ error: '学生不存在' });
+    res.status(404).json({ error: '学生不存�? });
     return;
   }
 
@@ -118,7 +118,7 @@ router.post('/import', async (req: Request, res: Response) => {
     for (const stu of students) {
       const existing = getRow(db, 'SELECT id FROM students WHERE id = ?', [stu.id]);
       if (existing) {
-        runSql(db, "UPDATE students SET name = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", [stu.name, stu.id]);
+        runSql(db, "UPDATE students SET name = ?, updated_at = NOW() WHERE id = ?", [stu.name, stu.id]);
       } else {
         runSql(db, 'INSERT INTO students (id, name) VALUES (?, ?)', [stu.id, stu.name]);
       }
@@ -135,7 +135,7 @@ router.post('/import', async (req: Request, res: Response) => {
           : `G${Date.now()}${Math.random().toString(36).substr(2, 4)}`;
 
         if (existingGrade) {
-          runSql(db, "UPDATE grades SET grade = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", [g.grade, gradeId]);
+          runSql(db, "UPDATE grades SET grade = ?, updated_at = NOW() WHERE id = ?", [g.grade, gradeId]);
         } else {
           runSql(db, 'INSERT INTO grades (id, student_id, course_name, grade) VALUES (?, ?, ?, ?)', [gradeId, stu.id, g.course_name, g.grade]);
         }

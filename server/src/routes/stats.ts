@@ -157,7 +157,11 @@ router.get('/export-ranking', async (req: Request, res: Response) => {
       weighted_avg: Math.round(weightedAvg * 100) / 100,
       avg_gpa: Math.round(avgGPA * 100) / 100
     };
-  }).sort((a, b) => b.weighted_avg - a.weighted_avg);
+  });
+
+  // 支持 ?sort=gpa 按 GPA 排序，默认按加权平均分排序
+  const sortBy = req.query.sort === 'gpa' ? 'avg_gpa' : 'weighted_avg';
+  ranking.sort((a: any, b: any) => (b as any)[sortBy] - (a as any)[sortBy]);
 
   res.json(ranking);
 });

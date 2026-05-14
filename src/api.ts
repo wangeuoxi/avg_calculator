@@ -157,8 +157,9 @@ export interface RankingEntry {
   avg_gpa: number;
 }
 
-export async function fetchRanking(): Promise<RankingEntry[]> {
-  return request('/stats/export-ranking');
+export async function fetchRanking(sort?: 'weighted' | 'gpa'): Promise<RankingEntry[]> {
+  const qs = sort ? `?sort=${sort}` : '';
+  return request(`/stats/export-ranking${qs}`);
 }
 
 export async function importStudents(students: { id: string; name: string; grades: { course_name: string; grade: number }[] }[]): Promise<any> {

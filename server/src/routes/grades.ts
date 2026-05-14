@@ -9,13 +9,13 @@ router.post('/:studentId', async (req: Request, res: Response) => {
   const { course_name, grade } = req.body;
 
   if (!course_name || grade === undefined) {
-    res.status(400).json({ error: '课程名称和成绩不能为空' });
+    res.status(400).json({ error: '课程名称和成绩不能为�? });
     return;
   }
 
   const student = getRow(db, 'SELECT * FROM students WHERE id = ?', [req.params.studentId]);
   if (!student) {
-    res.status(404).json({ error: '学生不存在' });
+    res.status(404).json({ error: '学生不存�? });
     return;
   }
 
@@ -37,7 +37,7 @@ router.post('/:studentId', async (req: Request, res: Response) => {
 
   if (existingGrade) {
     runSql(db,
-      "UPDATE grades SET grade = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+      "UPDATE grades SET grade = ?, updated_at = NOW() WHERE id = ?",
       [grade, gradeId]
     );
   } else {
@@ -68,7 +68,7 @@ router.delete('/:studentId/:courseName', async (req: Request, res: Response) => 
   );
 
   if (result.changes === 0) {
-    res.status(404).json({ error: '成绩记录不存在' });
+    res.status(404).json({ error: '成绩记录不存�? });
     return;
   }
 
@@ -81,7 +81,7 @@ router.delete('/:studentId', async (req: Request, res: Response) => {
   const db = await getDb();
   runSql(db, 'DELETE FROM grades WHERE student_id = ?', [req.params.studentId]);
   saveDb(db);
-  res.json({ message: '已清空该学生所有成绩' });
+  res.json({ message: '已清空该学生所有成�? });
 });
 
 export default router;
