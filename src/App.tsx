@@ -35,6 +35,7 @@ import {
   upsertGrade,
   deleteGrade,
   clearStudentGrades,
+  importStudents,
   type StudentRecord,
   type StudentFullStats,
   type ClassStats,
@@ -383,25 +384,27 @@ export default function App() {
           const courseColumns = headers.map((h: string, idx: number) => ({ name: String(h), index: idx }))
             .filter(h => h.name && !excludeHeaders.includes(h.name) && h.index !== idIdx && h.index !== nameIdx);
 
+          // 组装所有数据，一次批量提交
+          const studentsData: { id: string; name: string; grades: { course_name: string; grade: number }[] }[] = [];
+
           for (let i = headerRowIndex + 1; i < rawData.length; i++) {
             const row = rawData[i];
             const id = String(row[idIdx] || '').trim();
             const name = String(row[nameIdx] || '').trim();
             if (!id || !name) continue;
 
-            // Create student if not exists
-            try { await createStudent(id, name); } catch (_) {}
-            await updateStudent(id, name);
-
+            const grades: { course_name: string; grade: number }[] = [];
             for (const col of courseColumns) {
               const gradeVal = row[col.index];
               if (gradeVal !== undefined && gradeVal !== null && String(gradeVal).trim() !== '') {
-                const grade = parseGrade(gradeVal);
-                await upsertCourse(col.name, 1).catch(() => {});
-                await upsertGrade(id, col.name, grade);
+                grades.push({ course_name: col.name, grade: parseGrade(gradeVal) });
               }
             }
+            studentsData.push({ id, name, grades });
           }
+
+          // 一次请求搞定
+          await importStudents(studentsData);
 
           await Promise.all([
             loadStudentsAndStats(),

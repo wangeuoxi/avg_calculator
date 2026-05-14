@@ -160,3 +160,10 @@ export interface RankingEntry {
 export async function fetchRanking(): Promise<RankingEntry[]> {
   return request('/stats/export-ranking');
 }
+
+export async function importStudents(students: { id: string; name: string; grades: { course_name: string; grade: number }[] }[]): Promise<any> {
+  return request('/students/import', {
+    method: 'POST',
+    body: JSON.stringify({ students }),
+  });
+}

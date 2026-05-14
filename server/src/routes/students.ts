@@ -104,4 +104,49 @@ router.delete('/:id', async (req: Request, res: Response) => {
   res.json({ message: '删除成功' });
 });
 
+// POST /api/students/import - 批量导入
+router.post('/import', async (req: Request, res: Response) => {
+  const db = await getDb();
+  const { students } = req.body;
+
+  if (!Array.isArray(students) || students.length === 0) {
+    res.status(400).json({ error: '数据不能为空' });
+    return;
+  }
+
+  try {
+    for (const stu of students) {
+      const existing = getRow(db, 'SELECT id FROM students WHERE id = ?', [stu.id]);
+      if (existing) {
+        runSql(db, "UPDATE students SET name = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", [stu.name, stu.id]);
+      } else {
+        runSql(db, 'INSERT INTO students (id, name) VALUES (?, ?)', [stu.id, stu.name]);
+      }
+
+      for (const g of stu.grades || []) {
+        const course = getRow(db, 'SELECT * FROM courses WHERE name = ?', [g.course_name]);
+        if (!course) {
+          runSql(db, 'INSERT INTO courses (name, credit) VALUES (?, 1)', [g.course_name]);
+        }
+
+        const existingGrade = getRow(db, 'SELECT * FROM grades WHERE student_id = ? AND course_name = ?', [stu.id, g.course_name]);
+        const gradeId = existingGrade
+          ? existingGrade.id
+          : `G${Date.now()}${Math.random().toString(36).substr(2, 4)}`;
+
+        if (existingGrade) {
+          runSql(db, "UPDATE grades SET grade = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", [g.grade, gradeId]);
+        } else {
+          runSql(db, 'INSERT INTO grades (id, student_id, course_name, grade) VALUES (?, ?, ?, ?)', [gradeId, stu.id, g.course_name, g.grade]);
+        }
+      }
+    }
+
+    saveDb(db);
+    res.json({ success: true, count: students.length });
+  } catch (err: any) {
+    res.status(500).json({ error: '导入失败: ' + err.message });
+  }
+});
+
 export default router;
